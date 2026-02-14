@@ -15,6 +15,10 @@ const INITIAL_STATE = {
   prestigePoints: 0,
   lastTick: Date.now(),
   activeTheme: 'emerald',
+  settings: {
+    musicEnabled: true,
+    sfxEnabled: true
+  }
 };
 
 const THEME_STYLES = {
@@ -28,6 +32,14 @@ const THEME_STYLES = {
   desert: { bg: 'from-amber-100 to-orange-200', accent: 'amber', text: 'amber-900', card: 'white' },
   lavender: { bg: 'from-violet-100 to-purple-200', accent: 'violet', text: 'violet-900', card: 'white' },
   void: { bg: 'from-black to-zinc-900', accent: 'zinc', text: 'zinc-400', card: 'black/50' },
+};
+
+// High quality audio assets
+const AUDIO_URLS = {
+  music: 'https://www.chosic.com/wp-content/uploads/2021/07/Rain-and-Puddles.mp3',
+  click: 'https://www.soundjay.com/buttons/sounds/button-3.mp3', 
+  buy: 'https://actions.google.com/sounds/v1/commerce/cash_register.ogg',
+  levelUp: 'https://actions.google.com/sounds/v1/foley/wind_chime_vines.ogg'
 };
 
 export default function App() {
@@ -46,8 +58,43 @@ export default function App() {
   });
 
   const [floatingTexts, setFloatingTexts] = useState([]);
+  const musicRef = useRef(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // Initialize LoFi Music
+  useEffect(() => {
+    musicRef.current = new Audio(AUDIO_URLS.music);
+    musicRef.current.loop = true;
+    musicRef.current.volume = 0.2; // Keep background music subtle
+
+    return () => {
+      if (musicRef.current) {
+        musicRef.current.pause();
+        musicRef.current = null;
+      }
+    };
+  }, []);
+
+  // Sync music playback with settings
+  useEffect(() => {
+    if (!musicRef.current) return;
+    if (state.settings.musicEnabled) {
+      // Note: Browsers block play() until first interaction
+      musicRef.current.play().catch(() => {
+        console.log("Waiting for interaction to start LoFi music...");
+      });
+    } else {
+      musicRef.current.pause();
+    }
+  }, [state.settings.musicEnabled]);
+
+  const playSFX = (type) => {
+    if (!state.settings.sfxEnabled) return;
+    const sfx = new Audio(AUDIO_URLS[type]);
+    sfx.volume = type === 'click' ? 0.3 : 0.6;
+    sfx.play().catch(() => {});
+  };
 
   useEffect(() => {
     localStorage.setItem('capy_clicker_save', JSON.stringify(state));
@@ -107,6 +154,11 @@ export default function App() {
     setState(prev => {
       const newTotal = prev.totalCoinsEarned + amount;
       const { level, xp } = handleLeveling(newTotal);
+      
+      if (level > prev.level) {
+        setTimeout(() => playSFX('levelUp'), 0);
+      }
+
       return {
         ...prev,
         coins: prev.coins + amount,
@@ -118,6 +170,12 @@ export default function App() {
   };
 
   const handleCapyClick = (x, y) => {
+    // Attempt to start music if it was blocked by autoplay
+    if (state.settings.musicEnabled && musicRef.current && musicRef.current.paused) {
+      musicRef.current.play().catch(() => {});
+    }
+
+    playSFX('click');
     const isCrit = Math.random() * 100 < critChance;
     const amount = isCrit ? cpc * critMult : cpc;
     addCoins(amount);
@@ -135,8 +193,8 @@ export default function App() {
     const isTheme = upgrade.category === UpgradeCategory.THEMES;
     const isOwned = count > 0;
 
-    // Corrected logic: Must have enough coins to buy, OR it's a theme you already own (free switch)
     if (state.coins >= cost || (isTheme && isOwned)) {
+      playSFX('buy');
       setState(prev => {
         const currentCount = prev.upgradesPurchased[upgrade.id] || 0;
         const currentCost = Math.floor(upgrade.baseCost * Math.pow(COST_GROWTH, currentCount));
@@ -144,30 +202,31 @@ export default function App() {
         
         if (isTheme) {
           newState.activeTheme = upgrade.effectValue;
-          // Only deduct coins if not already owned
           if (!isOwned && prev.coins >= currentCost) {
             newState.coins = prev.coins - currentCost;
-            newState.upgradesPurchased = {
-              ...prev.upgradesPurchased,
-              [upgrade.id]: 1
-            };
+            newState.upgradesPurchased = { ...prev.upgradesPurchased, [upgrade.id]: 1 };
           }
           return newState;
         }
 
-        // For repeatable upgrades, strictly check coins
         if (prev.coins >= currentCost) {
           newState.coins = prev.coins - currentCost;
-          newState.upgradesPurchased = {
-            ...prev.upgradesPurchased,
-            [upgrade.id]: currentCount + 1
-          };
+          newState.upgradesPurchased = { ...prev.upgradesPurchased, [upgrade.id]: currentCount + 1 };
           return newState;
         }
-        
-        return prev; // Return original if couldn't afford on nested check
+        return prev;
       });
     }
+  };
+
+  const toggleSetting = (key) => {
+    setState(prev => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        [key]: !prev.settings[key]
+      }
+    }));
   };
 
   const resetGame = () => {
@@ -213,11 +272,34 @@ export default function App() {
           style: { left: t.x, top: t.y } 
         }, t.text)
       ),
+      // Hard Reset Panel
       React.createElement('div', { className: "absolute bottom-8 left-8" },
         React.createElement('button', { 
           onClick: resetGame,
           className: "px-4 py-2 bg-white/20 text-white rounded-lg text-sm font-semibold hover:bg-red-500 transition-colors shadow-sm backdrop-blur-md"
         }, "Hard Reset")
+      ),
+      // Audio Control Panel
+      React.createElement('div', { className: "absolute bottom-8 right-8 flex gap-3 p-3 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-2xl" },
+        React.createElement('div', { className: "flex flex-col items-center gap-1" },
+          React.createElement('button', { 
+            onClick: () => toggleSetting('musicEnabled'),
+            className: `p-3 rounded-xl transition-all ${state.settings.musicEnabled ? 'bg-emerald-500 text-white' : 'bg-black/20 text-white/50'}`
+          }, 
+            React.createElement('span', { className: "text-lg" }, state.settings.musicEnabled ? '🎵' : '🔇')
+          ),
+          React.createElement('span', { className: "text-[10px] font-bold text-emerald-900/40 uppercase" }, "Music")
+        ),
+        React.createElement('div', { className: "w-[1px] bg-white/20 self-stretch my-2" }),
+        React.createElement('div', { className: "flex flex-col items-center gap-1" },
+          React.createElement('button', { 
+            onClick: () => toggleSetting('sfxEnabled'),
+            className: `p-3 rounded-xl transition-all ${state.settings.sfxEnabled ? 'bg-emerald-500 text-white' : 'bg-black/20 text-white/50'}`
+          }, 
+            React.createElement('span', { className: "text-lg" }, state.settings.sfxEnabled ? '🔊' : '🔇')
+          ),
+          React.createElement('span', { className: "text-[10px] font-bold text-emerald-900/40 uppercase" }, "SFX")
+        )
       )
     ),
     React.createElement('div', { 
